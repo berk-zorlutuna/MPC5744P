@@ -1,1 +1,212 @@
-# MPC5744P
+# MPC5744P EV Traction Inverter + Vehicle Control
+
+Embedded C firmware for driving an electric car with an NXP **MPC5744P**
+(e200z4 lockstep, 200 MHz, FPU). It combines two jobs on one chip:
+
+* **Traction inverter**: field oriented control (FOC) of an interior permanent
+  magnet synchronous motor (IPMSM), with MTPA, field weakening, a
+  voltage-limited torque envelope, active short circuit and hardware
+  overcurrent shutdown.
+* **Vehicle control unit (VCU)**: accelerator pedal, brake, gear selector,
+  regenerative braking, HV contactor and precharge sequencing, BMS
+  communication over CAN, diagnostics and fault reactions.
+
+> **Safety warning.** This is a development base, not a certified product.
+> A vehicle drive system is safety-critical (ISO 26262, typically ASIL C/D for
+> unintended acceleration). High voltage is lethal. Bring it up on a
+> dynamometer with a current-limited supply. Do not put it on a public road
+> without a full functional-safety process: hazard analysis, safety concept,
+> independent review, HIL and vehicle validation.
+
+---
+
+## Directory layout
+
+```
+config/
+  ev_config.h        Motor, inverter, battery, pedal, drivability parameters
+  board_cfg.h        Pins, ADC channels, IRQ vectors, sensor scaling (board specific)
+src/
+  main.c             Entry point
+  bsp/bsp.h          Hardware abstraction used by everything above it
+  bsp/mpc5744p/      MPC5744P drivers: clocks, FlexPWM, CTU+ADC, DSPI resolver,
+                     FlexCAN, SIUL2 GPIO, SWT watchdog, PIT, INTC
+  control/           FOC, PI, SVM, angle-tracking PLL, math (portable)
+  app/               Application scheduler, vehicle state machine, torque manager, pedal
+  safety/            Fault manager: latching, debouncing, reactions
+  comm/              CAN message encode/decode (BMS in, VCU status out)
+tests/               Host unit tests + closed-loop motor simulation + BSP stub
+```
+
+Everything outside `src/bsp/mpc5744p/` is hardware independent and is built
+and tested on a PC (`make test`).
+
+## Execution model
+
+| Context | Rate | Trigger | Work |
+|---|---|---|---|
+| `app_fast_isr` | 10 kHz (PWM) | FlexPWM reload → CTU → ADC_0/ADC_1 → ADC_1 EOC IRQ | Phase currents and Vdc (simultaneous sampling), resolver angle, fast protections, FOC, PWM update |
+| `app_task_1ms` | 1 kHz | PIT_0 ch0 | Pedal, temperatures, digital inputs, CAN RX, debounced diagnostics, torque manager |
+| └ every 10 ms | 100 Hz | | Vehicle state machine, contactors, CAN TX |
+| `app_background` | idle | main loop | Checks that both periodic tasks ran at the expected rate, then services the SWT watchdog |
+
+Current sampling happens at the PWM counter reload. That's the middle of the
+zero vector, with all low sides on, so switching noise stays out of the
+measurement and the sample gives the average current. The new duty cycle is
+loaded at the next reload, and the FOC compensates the 1.5-sample delay in the
+output angle.
+
+## Motor control (`src/control`)
+
+* Amplitude-invariant Clarke/Park transforms. Torque:
+  `T = 1.5·p·(ψ·iq + (Ld−Lq)·id·iq)`.
+* **MTPA**: a torque request becomes (id, iq) by iterating along the MTPA locus.
+* **Field weakening**: a voltage loop adds negative id when the voltage demand
+  goes above 92 % of the limit. iq is then solved again for the new id, so the
+  reluctance torque from the extra id doesn't overshoot the torque request.
+* **Voltage ellipse limit**: caps |iq| when field weakening alone can't keep
+  the voltage inside the hexagon (voltage-limited torque at top speed).
+* **Current regulators**: PI tuned by bandwidth (`Kp = L·ωc`, `Ki = R·ωc`,
+  500 Hz), back-EMF and cross-coupling feed-forward. The voltage vector is
+  limited as a whole, preserving its direction, and the integrators freeze while
+  it is saturated. The simulation showed that d-axis-priority limiting can lock
+  up at high speed, where the dq axes are strongly coupled.
+* **Flying start**: when PWM is enabled on a spinning motor (coming from ASC),
+  the FW current and integrators are preset from the measured current, so the
+  handover has no voltage jump.
+* **SVM**: min/max zero-sequence injection, linear up to Vdc/√3.
+* **PLL** angle tracking observer for speed.
+
+The closed-loop simulation in `tests/` runs the controller against an IPMSM
+model with an averaged inverter and the real one-period PWM delay. It checks:
+
+| Scenario | Result |
+|---|---|
+| 150 Nm at 2000 rpm | id/iq on MTPA reference, 149.8 Nm |
+| Accelerate 0 → 12000 rpm at 40 Nm | 40.0 Nm held through deep field weakening, \|i\| = 258 A |
+| −60 Nm regen at 12000 rpm | −60.0 Nm, voltage limited, no overcurrent |
+| ASC → run at 9000 / 12000 rpm | converges, peak current < trip level |
+
+## Vehicle logic (`src/app`)
+
+**State machine** (`vehicle_sm.c`):
+
+```
+INIT → STANDBY ──key on + BMS ready──► PRECHARGE ──Vbus ≥ 95 % Vbatt──► READY
+          ▲                               │ timeout                      │ brake + D/R + standstill
+          │                               ▼                              ▼
+          └──── V < 60 V ◄──── SHUTDOWN ◄──── key off / HV-off fault ── DRIVE
+                                   ▲                                     │ torque-off fault
+                                   └──────────── key off ◄──── FAULT ◄───┘
+```
+
+* Precharge: close HV− and the precharge relay, wait until Vbus reaches 95 % of
+  battery voltage (minimum time and timeout apply), close HV+, open precharge.
+* Shutdown: open HV+, then HV−, then active discharge to < 60 V, with a timeout.
+* D/R engagement needs the brake pressed and the vehicle at standstill.
+  P is only allowed at standstill. Key-off at speed is ignored until the vehicle
+  slows down: the gear goes to N with zero torque, and HV stays on.
+
+**Torque manager** (`torque_mgr.c`): pedal map scaled by available torque
+(motor torque curve, motor power, battery discharge/charge current limits from
+the BMS), coast and brake regen that fades out near standstill,
+brake-throttle override, reverse torque and speed limits, thermal and
+undervoltage derating, limp mode, and a slew-rate limit that is slower around
+zero torque to protect against driveline lash.
+
+**Pedal** (`pedal.c`): two redundant tracks (track 2 = ½ track 1), range and
+plausibility checks with debounce. The lower track is used. A suspicious
+reading gives zero torque immediately and latches as a fault after debounce.
+
+## Diagnostics and safe state (`src/safety`)
+
+| Fault | Detection | Reaction |
+|---|---|---|
+| HW overcurrent / desat | FlexPWM FAULT0 pin, hardware disables PWM in < 1 µs | Torque off, all switches off |
+| SW overcurrent, current sum ≠ 0, sensor offset | Fast ISR / calibration | Torque off |
+| DC link over/undervoltage | Fast ISR / 1 ms | Torque off |
+| Inverter / motor overtemperature | 1 ms, debounced (derating starts earlier) | Torque off |
+| Resolver fault, overspeed | Fast ISR / 1 ms | Torque off |
+| Pedal range / plausibility | 1 ms | Limp (30 % torque) |
+| BMS timeout / BMS fault / precharge failure | 1 ms / VSM | HV off |
+
+**Torque-off safe state**: below `ASC_ENTER_RPM` all six switches turn off
+(freewheel). Above it the inverter uses **active short circuit** (low sides
+on), so back-EMF can't rectify uncontrolled into the battery. After a
+hardware overcurrent the switches are always off. Faults stay latched until
+the next key cycle.
+
+## CAN (500 kbit/s, little-endian)
+
+| ID | Dir | Content |
+|---|---|---|
+| 0x101 | RX | BMS status: pack V, pack I, SOC, ready/fault, alive counter, XOR checksum |
+| 0x102 | RX | BMS limits: max discharge / charge current, alive counter, XOR checksum |
+| 0x301 | TX | VCU status: state, gear, rpm, torque command, reaction, alive |
+| 0x302 | TX | VCU diagnostics: fault mask, Vdc, temperatures |
+
+A frame is rejected on a checksum error or a stuck alive counter. The BMS
+times out after 300 ms. Adapt the layout to your BMS DBC.
+
+## Building
+
+### Host tests
+
+```sh
+make test
+```
+
+This builds with `-Wall -Wextra -Werror -Wconversion` and runs 238 checks:
+transforms, PI, SVM, PLL, the FOC closed-loop simulations above, pedal,
+torque manager, state machine, diagnostics, CAN, and an integration test of the
+whole application against a BSP stub (calibration → precharge → drive → fault
+→ shutdown → new key cycle).
+
+### Target (S32 Design Studio for Power Architecture)
+
+1. Create a new **MPC5744P** application project (C, VLE, single core,
+   hardware FPU). It provides the startup code, linker file, `MPC5744P.h`,
+   `xcptn_xmpl()` and the INTC vector table.
+2. Delete the template `main.c`. Add `src/` and `config/` to the project and
+   add every `src/*` directory plus `config/` to the include paths.
+3. Enter the BSP interrupt handlers in `IntcIsrVectorTable[]` at the vector
+   numbers from `board_cfg.h`: `bsp_isr_adc1_eoc`, `bsp_isr_pit0_ch0`,
+   `bsp_isr_flexpwm0_fault`. The software-vector-mode INTC handler must allow
+   nesting, so the 10 kHz current loop can pre-empt the 1 ms task.
+4. Fill in `board_cfg.h` from your schematic and define `BOARD_CFG_VERIFIED`.
+5. Replace every value in `ev_config.h` with your motor, inverter and battery
+   data.
+
+## Verification status and what still needs to be done
+
+**Verified here:** all portable code (control, vehicle logic, diagnostics,
+CAN) builds and passes the host test suite, including the closed-loop motor
+simulation.
+
+**Not verified here:** the `src/bsp/mpc5744p/` drivers. They were written
+against the MPC5744P reference manual register map and only syntax-checked
+against a stand-in header. No PowerPC compiler or hardware was available.
+Lines marked `VERIFY` (PLL dividers, clock-group dividers, CTU command
+format, INTC PSR layout, ADC flag bits, DSPI CTAR) must be checked against
+the RM and the `MPC5744P.h` from your S32DS version, then measured on the
+bench: clock outputs, PWM frequency and dead time on a scope, the ADC trigger
+point relative to PWM, CAN bit timing.
+
+**Bring-up order:** LV only → clocks/PWM/dead time on a scope with gate
+drivers disconnected → ADC and current sensor calibration → resolver offset
+(end-of-line calibration into `RESOLVER_OFFSET_RAD`) → low-voltage DC link
+with a current-limited supply, current loop in `FOC_MODE_CURRENT` → full
+voltage on a dyno.
+
+**Missing for a production vehicle:**
+
+* FCCU configuration and handling, lockstep and memory ECC fault reactions,
+  startup self-tests (ADC BIST, LBIST/MBIST), clock monitors (CMU)
+* Independent monitoring (second-level torque monitor / "level 2" plausibility,
+  external window watchdog / safety SBC)
+* Contactor weld detection, insulation monitoring, crash signal / HVIL
+* Resolver excitation and RDC configuration, sensor offset auto-calibration
+* E2E protection with CRC (AUTOSAR E2E profiles) instead of XOR checksums
+* NVM for calibration and fault logging, bootloader, UDS diagnostics
+* Thermal management (pump/fan control), DC/DC, charging, brake blending
+  with the hydraulic brake system, traction control

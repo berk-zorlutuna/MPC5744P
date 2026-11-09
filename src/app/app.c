@@ -26,6 +26,7 @@ static struct {
     uint32_t n;
     float off[3];
     volatile bool done;
+    volatile bool bad;          /* offset out of tolerance: persists until power cycle */
 } s_cal;
 
 /* ---------- 1 ms task -> fast ISR (single-word writes, atomic) ---------- */
@@ -79,6 +80,7 @@ void app_init(void)
     s_cal.acc[0] = s_cal.acc[1] = s_cal.acc[2] = 0.0f;
     s_cal.n = 0u;
     s_cal.done = false;
+    s_cal.bad = false;
 
     s_cmd.torque_ref = 0.0f;
     s_cmd.inv_run = false;
@@ -116,6 +118,7 @@ static void calibrate_offsets(const bsp_adc_fast_t *raw)
         for (k = 0; k < 3u; k++) {
             s_cal.off[k] = s_cal.acc[k] / (float)CAL_SAMPLES;
             if (fabsf(s_cal.off[k] - CUR_ZERO_COUNTS) * CUR_A_PER_COUNT > INV_I_OFFSET_MAX_A) {
+                s_cal.bad = true;
                 diag_set(FLT_CURRENT_OFFSET);
             }
         }
@@ -263,7 +266,7 @@ static void task_10ms(bool key, bool brake, gear_t gear_sel, float rpm, float vd
     vin.key_on = key;
     vin.brake = brake;
     vin.bms_ready = s_bms.ready && !s_bms.fault && !bms_info_timeout(&s_bms);
-    vin.inverter_ready = s_cal.done && !bsp_pwm_hw_fault();
+    vin.inverter_ready = s_cal.done && !s_cal.bad && !bsp_pwm_hw_fault();
     vin.gear_sel = gear_sel;
     vin.vbus = vdc;
     vin.vbatt = s_bms.pack_v;
@@ -341,6 +344,8 @@ void app_task_1ms(void)
                   (s_vsm.st == VSM_READY || s_vsm.st == VSM_DRIVE) && vdc < HV_UV_TRIP_V, 50u, 1u);
     diag_debounce(FLT_BMS_TIMEOUT, hv_connected(s_vsm.st) && bms_info_timeout(&s_bms), 1u, 1u);
     diag_debounce(FLT_BMS_FAULT, hv_connected(s_vsm.st) && s_bms.fault, 1u, 1u);
+    /* Calibration only runs at power-up: a bad offset must survive key cycles */
+    if (s_cal.bad) { diag_set(FLT_CURRENT_OFFSET); }
     if (s_pedal.range_err) { diag_set(FLT_APPS_RANGE); }
     if (s_pedal.plaus_err) { diag_set(FLT_APPS_PLAUS); }
 

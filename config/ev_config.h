@@ -26,7 +26,7 @@
 #define MOTOR_LQ_H                  0.00030f            /* q-axis inductance */
 #define MOTOR_PSI_WB                0.060f              /* PM flux linkage (peak, per phase) */
 #define MOTOR_MAX_RPM               12000.0f
-#define MOTOR_MAX_TORQUE_NM         250.0f
+#define MOTOR_MAX_TORQUE_NM         230.0f              /* MTPA needs 437 A; <= INV_I_MAX_A (SVC-CTL-005) */
 #define MOTOR_MAX_REGEN_NM          150.0f
 #define MOTOR_MAX_POWER_W           100000.0f
 #define MOTOR_MAX_REGEN_POWER_W     60000.0f

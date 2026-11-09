@@ -44,6 +44,7 @@ bool bsp_can_receive(bsp_can_frame_t *f)
 bool bsp_can_send(const bsp_can_frame_t *f)
 {
     g_stub.last_tx = *f;
+    g_stub.tx_log[g_stub.tx_count % STUB_TX_LOG] = *f;
     g_stub.tx_count++;
     return true;
 }

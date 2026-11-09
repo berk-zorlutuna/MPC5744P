@@ -6,8 +6,8 @@
 | Item | Value |
 |---|---|
 | Document | SVR, results for the cases in [03_software_verification_cases.md](03_software_verification_cases.md) |
-| Software revision | `11b7bab` |
-| Date | 2026-11-09 16:40 UTC |
+| Software revision | `bff098e` |
+| Date | 2026-11-09 23:04 UTC |
 | Test environment | Host PC, `tests/` harness, BSP replaced by `tests/bsp_stub.c` |
 | Compiler | `13.3.0`, `-std=c99 -O2 -Wall -Wextra -Wshadow -Wconversion -Wno-sign-conversion -Wdouble-promotion -Werror` |
 | Target hardware | None (MPC5744P not available) |

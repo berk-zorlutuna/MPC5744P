@@ -14,7 +14,7 @@ SRC := src/control/pi.c src/control/svm.c src/control/pll.c src/control/foc.c \
        tests/bsp_stub.c tests/harness.c tests/sim_motor.c tests/vtest.c \
        tests/test_control.c tests/test_vehicle.c tests/test_integration.c
 
-.PHONY: all test report trace clean
+.PHONY: all test report hw-report schematics trace clean
 
 all: test
 
@@ -29,6 +29,15 @@ test: $(BUILD)/tests
 REV := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)$(shell git diff --quiet HEAD -- src config tests 2>/dev/null || echo -modified)
 report: $(BUILD)/tests
 	./$(BUILD)/tests --report docs/04_software_verification_results.md --rev "$(REV)"
+
+# Hardware design analysis + results report (docs/08_hardware_verification_results.md)
+HWREV := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)$(shell git diff --quiet HEAD -- config tools src 2>/dev/null || echo -modified)
+hw-report:
+	python3 tools/hw_analysis.py --report docs/08_hardware_verification_results.md --rev "$(HWREV)"
+
+# Concept schematics (docs/hw/*.svg) and BOM; needs: pip install schemdraw==0.19
+schematics:
+	python3 tools/draw_schematics.py
 
 # Traceability consistency check across the requirement and verification documents
 trace:

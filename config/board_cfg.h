@@ -74,16 +74,41 @@
 /* ------------------------------------------------------------------ */
 /* Sensor scaling                                                      */
 /* ------------------------------------------------------------------ */
-#define ADC_VREF_V              5.0f
+/* Component values below must match the hardware design
+ * (tools/hw_design.py, docs/06_hardware_design.md). `make hw-report`
+ * checks them against each other. */
+#define ADC_VREF_V              3.3f         /* VREFH = precision analog 3.3 V */
 #define ADC_FULL_SCALE          4095.0f
 #define ADC_V_PER_COUNT         (ADC_VREF_V / ADC_FULL_SCALE)
-/* Hall current sensor: 2.5 V at 0 A, 4 mV/A at the ADC pin */
-#define CUR_A_PER_COUNT         (ADC_V_PER_COUNT / 0.004f)
-#define CUR_ZERO_COUNTS         2048.0f
-/* DC link divider: 500 V -> 5 V */
-#define VDC_V_PER_COUNT         (ADC_V_PER_COUNT * 100.0f)
-/* NTC in a divider to 5 V with a pull-up resistor */
-#define NTC_PULLUP_OHM          10000.0f
+
+/* Phase current: open-loop Hall sensor on a precision 5 V supply,
+ * 2.5 V at 0 A, 2.5 mV/A, then a resistive divider to the 3.3 V ADC range */
+#define CUR_SENSOR_ZERO_V       2.5f
+#define CUR_SENSOR_V_PER_A      0.0025f
+#define CUR_DIV_R_TOP_OHM       10000.0f
+#define CUR_DIV_R_BOT_OHM       19600.0f
+#define CUR_DIV_RATIO           (CUR_DIV_R_BOT_OHM / (CUR_DIV_R_TOP_OHM + CUR_DIV_R_BOT_OHM))
+#define CUR_A_PER_COUNT         (ADC_V_PER_COUNT / (CUR_SENSOR_V_PER_A * CUR_DIV_RATIO))
+#define CUR_ZERO_COUNTS         (CUR_SENSOR_ZERO_V * CUR_DIV_RATIO / ADC_V_PER_COUNT)
+
+/* DC link voltage: high-voltage resistor string -> reinforced isolated
+ * amplifier (gain 1) -> differential-to-single-ended op amp -> ADC */
+#define VDC_DIV_R_TOP_OHM       5000000.0f   /* 5 x 1 MOhm */
+#define VDC_DIV_R_BOT_OHM       20000.0f
+#define VDC_ISO_GAIN            1.0f
+#define VDC_OPAMP_GAIN          1.5f
+#define VDC_V_PER_COUNT         (ADC_V_PER_COUNT * (VDC_DIV_R_TOP_OHM + VDC_DIV_R_BOT_OHM) \
+                                 / (VDC_DIV_R_BOT_OHM * VDC_ISO_GAIN * VDC_OPAMP_GAIN))
+
+/* Accelerator pedal tracks: 5 V sensor output -> divider -> ADC.
+ * APPS_V_PER_COUNT converts counts to volts at the sensor. */
+#define APPS_DIV_R_TOP_OHM      22000.0f     /* limits clamp current on a short to battery */
+#define APPS_DIV_R_BOT_OHM      43000.0f
+#define APPS_V_PER_COUNT        (ADC_V_PER_COUNT * (APPS_DIV_R_TOP_OHM + APPS_DIV_R_BOT_OHM) \
+                                 / APPS_DIV_R_BOT_OHM)
+
+/* NTC with pull-up to the ADC reference (ratiometric) */
+#define NTC_PULLUP_OHM          4700.0f      /* resolution at 165 C; -40 C stays below open threshold */
 #define NTC_R25_OHM             10000.0f
 #define NTC_BETA                3435.0f
 

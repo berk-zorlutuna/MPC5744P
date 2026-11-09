@@ -5,7 +5,7 @@
 | Document | SyRS, EV traction inverter and vehicle control unit |
 | Project | MPC5744P EV drive firmware |
 | Status | Draft, for review |
-| Related documents | [02 Software Requirements](02_software_requirements.md), [03 Software Verification Cases](03_software_verification_cases.md), [04 Software Verification Results](04_software_verification_results.md) |
+| Related documents | Software: [02 Requirements](02_software_requirements.md), [03 Verification Cases](03_software_verification_cases.md), [04 Verification Results](04_software_verification_results.md) · Hardware: [05 Requirements](05_hardware_requirements.md), [06 Design and Schematics](06_hardware_design.md), [07 Verification Cases](07_hardware_verification_cases.md), [08 Verification Results](08_hardware_verification_results.md) |
 
 ## 1. Scope
 
@@ -47,7 +47,8 @@ document for a real vehicle.
 
 Each requirement has a unique ID `SYS-nnn`. "Shall" denotes a mandatory
 requirement. Each requirement is refined by at least one software
-requirement (SWR) in [02_software_requirements.md](02_software_requirements.md).
+requirement (SWR, [02](02_software_requirements.md)) or hardware requirement
+(HWR, [05](05_hardware_requirements.md)).
 
 ## 4. Functional requirements
 
@@ -97,6 +98,7 @@ requirement (SWR) in [02_software_requirements.md](02_software_requirements.md).
 | SYS-045 | Torque shall be reduced linearly when the inverter or motor approaches its temperature limit or when the DC link voltage approaches its lower limit. | Graceful degradation instead of abrupt cut-off. |
 | SYS-046 | Failure of the control software to execute its periodic tasks at the specified rates shall lead to a microcontroller reset within 50 ms. | Program flow / temporal monitoring. |
 | SYS-047 | At power-up and in standby, all contactors, the discharge circuit, the gate drivers and the PWM outputs shall be inactive. | Safe initial state. |
+| SYS-048 | High-voltage circuits shall be separated from the 12 V and logic circuits by reinforced isolation. | Protection against electric shock (ISO 6469-3). |
 
 ### 4.6 Communication
 

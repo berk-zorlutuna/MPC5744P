@@ -315,8 +315,8 @@ void app_task_1ms(void)
 
     /* ---- inputs ---- */
     bsp_adc_read_slow(&sl);
-    pedal_update(&s_pedal, (float)sl.apps1 * ADC_V_PER_COUNT,
-                 (float)sl.apps2 * ADC_V_PER_COUNT, 1u);
+    pedal_update(&s_pedal, (float)sl.apps1 * APPS_V_PER_COUNT,
+                 (float)sl.apps2 * APPS_V_PER_COUNT, 1u);
     s_t_inv = ntc_temp_c(sl.t_inv);
     s_t_mot = ntc_temp_c(sl.t_mot);
     key = bsp_di_read(DI_KEY);

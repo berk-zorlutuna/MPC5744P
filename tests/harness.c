@@ -58,8 +58,9 @@ void h_make_bms_frames(bsp_can_frame_t *st, bsp_can_frame_t *lim, uint8_t alive,
 
 void h_set_pedal_volts(float v1, float v2)
 {
-    g_stub.adc_slow.apps1 = h_volts_to_counts(v1);
-    g_stub.adc_slow.apps2 = h_volts_to_counts(v2);
+    /* v1, v2 are sensor output voltages; the ADC sees them through the divider */
+    g_stub.adc_slow.apps1 = h_volts_to_counts(v1 * ADC_V_PER_COUNT / APPS_V_PER_COUNT);
+    g_stub.adc_slow.apps2 = h_volts_to_counts(v2 * ADC_V_PER_COUNT / APPS_V_PER_COUNT);
 }
 
 void h_set_pedal(float frac)
